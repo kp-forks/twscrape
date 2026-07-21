@@ -159,7 +159,7 @@ async def test_queue_client_passes_effective_proxy_to_xclid(pool_mock: AccountsP
         def calc(self, *args, **kwargs):
             return "mocked-clid"
 
-    async def fake_get(cls, username, proxy=None, fresh=False):
+    async def fake_get(cls, username, proxy=None, cookies=None, fresh=False):
         seen["username"] = username
         seen["proxy"] = proxy
         seen["fresh"] = fresh
@@ -495,5 +495,47 @@ async def test_404_retries_exhaust_and_abort(client_fixture: CF):
     with patch("twscrape.queue_client.asyncio.sleep"):
         rep = await client.get(URL)
     assert rep is None
+
+    await client.__aexit__(None, None, None)
+
+
+async def test_queue_client_passes_account_cookies_to_xclid(pool_mock: AccountsPool, monkeypatch):
+    mock = MockClient()
+    seen = {}
+
+    class FakeXClIdGen:
+        def calc(self, *args, **kwargs):
+            return "mocked-clid"
+
+    async def fake_get(cls, username, proxy=None, cookies=None, fresh=False):
+        seen["username"] = username
+        seen["cookies"] = cookies
+        seen["fresh"] = fresh
+        return FakeXClIdGen()
+
+    monkeypatch.setattr(Account, "make_client", lambda self, proxy=None: mock)
+    monkeypatch.setattr(XClIdGenStore, "get", classmethod(fake_get))
+
+    await pool_mock.add_account(
+        "user1",
+        "pass1",
+        "email1",
+        "email_pass1",
+        cookies='{"auth_token": "abc", "ct0": "def"}',
+    )
+    await pool_mock.set_active("user1", True)
+
+    client = QueueClient(pool_mock, "SearchTimeline")
+    await client.__aenter__()
+
+    mock.add_response(json={"ok": True})
+    rep = await client.get(URL)
+
+    assert rep is not None
+    assert seen == {
+        "username": "user1",
+        "cookies": {"auth_token": "abc", "ct0": "def"},
+        "fresh": False,
+    }
 
     await client.__aexit__(None, None, None)

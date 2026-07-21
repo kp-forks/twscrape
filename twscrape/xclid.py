@@ -2,8 +2,10 @@ import asyncio
 import base64
 import hashlib
 import math
+import os
 import random
 import re
+import sys
 import time
 from urllib.parse import urljoin
 
@@ -11,10 +13,11 @@ import bs4
 
 from .http import HttpClient
 from .http import make_client as _make_http_client
+from .utils import parse_cookies
 
 
-def _make_client(proxy: str | None = None) -> HttpClient:
-    return _make_http_client(headers={"user-agent": "@chrome"}, proxy=proxy)
+def _make_client(proxy: str | None = None, cookies: dict[str, str] | None = None) -> HttpClient:
+    return _make_http_client(headers={"user-agent": "@chrome"}, proxy=proxy, cookies=cookies)
 
 
 async def get_tw_page_text(url: str, clt: HttpClient):
@@ -315,8 +318,13 @@ async def load_keys(soup: bs4.BeautifulSoup, clt: HttpClient) -> tuple[list[int]
 
 class XClIdGen:
     @staticmethod
-    async def create(proxy: str | None = None) -> "XClIdGen":
-        clt = _make_client(proxy=proxy)
+    async def create(
+        proxy: str | None = None, cookies: dict[str, str] | None = None
+    ) -> "XClIdGen":
+        # X serves a different/legacy web build to authenticated vs anonymous
+        # sessions. Only authenticated sessions reliably contain the indices
+        # this parser depends on (see INDICES_FILE_RE).
+        clt = _make_client(proxy=proxy, cookies=cookies)
         try:
             text = await get_tw_page_text("https://x.com/tesla", clt)
             soup = bs4.BeautifulSoup(text, "html.parser")
@@ -348,7 +356,12 @@ class XClIdGen:
 
 
 async def main():
-    clt = _make_client()
+    cookies_raw = os.getenv("TWS_COOKIES")
+    cookies = parse_cookies(cookies_raw) if cookies_raw else None
+    if not cookies:
+        print("Warning: TWS_COOKIES not set — anonymous fetch will likely fail.", file=sys.stderr)
+
+    clt = _make_client(cookies=cookies)
     try:
         text = await get_tw_page_text("https://x.com/elonmusk", clt)
         soup = bs4.BeautifulSoup(text, "html.parser")
