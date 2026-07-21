@@ -17,6 +17,7 @@ from twscrape.http import (
     Response,
     _detect_backend,
     _resolve_browser,
+    format_error,
     make_client,
 )
 
@@ -71,6 +72,14 @@ def test_http_status_error_carries_response():
     assert err.response is resp
     assert err.response.status_code == 500
     assert err.response.text == "server error"
+
+
+def test_format_error():
+    response = Response(_raw(status_code=503))
+
+    assert format_error(HttpStatusError("HTTP 503", response=response)) == "HttpStatusError 503"
+    assert format_error(NetworkError("proxy credentials")) == "NetworkError"
+    assert format_error(ValueError("invalid value")) == "ValueError: invalid value"
 
 
 # --- _detect_backend ---

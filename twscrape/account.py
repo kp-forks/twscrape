@@ -13,6 +13,10 @@ from .utils import parse_proxy, utc
 TOKEN = "Bearer AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
 
 
+def has_required_cookies(cookies: dict[str, str]) -> bool:
+    return all(cookies.get(name) for name in ("auth_token", "ct0"))
+
+
 @dataclass
 class Account(JSONTrait):
     username: str

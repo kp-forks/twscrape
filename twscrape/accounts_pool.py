@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import TypedDict
 
-from .account import Account
+from .account import Account, has_required_cookies
 from .db import execute, fetchall, fetchone
 from .http import HttpStatusError
 from .logger import logger
@@ -111,7 +111,7 @@ class AccountsPool:
             mfa_code=mfa_code,
         )
 
-        if "ct0" in account.cookies:
+        if has_required_cookies(account.cookies):
             account.active = True
 
         await self.save(account)

@@ -1,4 +1,9 @@
+import pytest
+
 import twscrape.xclid as xclid
+from twscrape.http import NetworkError
+
+from .mock_http import MockClient
 
 
 class FakeClient:
@@ -68,3 +73,70 @@ async def test_xclid_create_without_proxy_or_cookies(monkeypatch):
 
     await xclid.XClIdGen.create()
     assert seen == {"proxy": None, "cookies": None}
+
+
+def test_logged_out_entry_is_account_error():
+    html = (
+        '<script src="https://abs.twimg.com/x-web/client-web/'
+        'entry-client-logged-out-a1b2c3.js"></script>'
+    )
+
+    with pytest.raises(xclid.XClIdAccountError, match="Logged-out X web app"):
+        xclid.get_scripts_list(html)
+
+
+async def test_find_indices_url_complete_scan_is_parse_error():
+    client = MockClient()
+    client.add_response(text="no reference")
+    client.add_response(text="still no reference")
+
+    with pytest.raises(
+        xclid.XClIdParseError,
+        match=r"Signing script not found \(assets: 2 loaded, 0 failed\)",
+    ):
+        await xclid._find_indices_url(["https://x.test/a.js", "https://x.test/b.js"], client)
+
+
+async def test_find_indices_url_summarizes_transport_error(monkeypatch):
+    client = MockClient()
+    error = NetworkError("asset timeout")
+    client.add_exception(error)
+    client.add_response(text="no reference")
+    messages = []
+    monkeypatch.setattr(xclid.logger, "trace", messages.append)
+
+    with pytest.raises(
+        xclid.XClIdParseError,
+        match=r"Signing script not found \(assets: 1 loaded, 1 failed\)",
+    ):
+        await xclid._find_indices_url(["https://x.test/a.js", "https://x.test/b.js"], client)
+
+    assert messages == ["XClId asset failed: NetworkError - https://x.test/a.js"]
+
+
+async def test_find_indices_url_summarizes_http_error(monkeypatch):
+    client = MockClient()
+    client.add_response(status_code=503)
+    client.add_response(text="no reference")
+    messages = []
+    monkeypatch.setattr(xclid.logger, "trace", messages.append)
+
+    with pytest.raises(
+        xclid.XClIdParseError,
+        match=r"Signing script not found \(assets: 1 loaded, 1 failed\)",
+    ):
+        await xclid._find_indices_url(["https://x.test/a.js", "https://x.test/b.js"], client)
+
+    assert messages == ["XClId asset failed: HttpStatusError 503 - https://x.test/a.js"]
+
+
+async def test_find_indices_url_returns_reference_despite_unrelated_failure():
+    client = MockClient()
+    client.add_exception(NetworkError("asset timeout"))
+    client.add_response(text='import("./sign.o-abc123.js")')
+
+    url = await xclid._find_indices_url(
+        ["https://x.test/assets/a.js", "https://x.test/assets/b.js"], client
+    )
+
+    assert url == "https://x.test/assets/sign.o-abc123.js"

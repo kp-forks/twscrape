@@ -53,6 +53,20 @@ async def test_add_account_cookies_without_ct0(pool_mock: AccountsPool):
     assert acc.active is False
 
 
+async def test_add_account_cookies_without_auth_token(pool_mock: AccountsPool):
+    await pool_mock.add_account_cookies("user1", "ct0=csrf")
+    acc = await pool_mock.get("user1")
+
+    assert acc.active is False
+
+
+async def test_add_account_cookies_without_session_cookies(pool_mock: AccountsPool):
+    await pool_mock.add_account_cookies("user1", "other=value")
+    acc = await pool_mock.get("user1")
+
+    assert acc.active is False
+
+
 async def test_add_account_cookies_existing(pool_mock: AccountsPool):
     await pool_mock.add_account_cookies("user1", "auth_token=token; ct0=csrf")
     acc = await pool_mock.get("user1")

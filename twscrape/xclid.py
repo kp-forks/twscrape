@@ -2,18 +2,25 @@ import asyncio
 import base64
 import hashlib
 import math
-import os
 import random
 import re
-import sys
 import time
 from urllib.parse import urljoin
 
 import bs4
 
-from .http import HttpClient
+from .http import HttpClient, format_error
 from .http import make_client as _make_http_client
-from .utils import parse_cookies
+from .logger import logger
+
+
+class XClIdError(Exception): ...
+
+
+class XClIdAccountError(XClIdError): ...
+
+
+class XClIdParseError(XClIdError): ...
 
 
 def _make_client(proxy: str | None = None, cookies: dict[str, str] | None = None) -> HttpClient:
@@ -52,6 +59,7 @@ def script_url(k: str, v: str):
 # Current X web build (Vite): script bundles are linked directly in the page
 # HTML under https://abs.twimg.com/x-web/.../*.js (modulepreload links + entry).
 ASSET_URL_RE = re.compile(r"https://[\w.-]+/x-web/[\w./-]+\.js")
+LOGGED_OUT_ENTRY_RE = re.compile(r"(?:^|/)entry-client-logged-out(?:[-.][^/?#]+)?\.js(?:[?#].*)?$")
 
 
 def get_scripts_list(text: str) -> list[str]:
@@ -68,6 +76,8 @@ def get_scripts_list(text: str) -> list[str]:
     """
     urls = list(dict.fromkeys(ASSET_URL_RE.findall(text)))
     if urls:
+        if any(LOGGED_OUT_ENTRY_RE.search(url) for url in urls):
+            raise XClIdAccountError("Logged-out X web app")
         return urls
 
     # Legacy webpack build fallback.
@@ -75,7 +85,7 @@ def get_scripts_list(text: str) -> list[str]:
     hash_map = {m.group(1): m.group(2) for m in re.finditer(r'(\d+):"([0-9a-f]{7})"', text)}
 
     if not hash_map:
-        raise Exception("Failed to parse scripts")
+        raise XClIdParseError("X web scripts not found")
 
     # Name map: values that are NOT exactly 7 hex digits (i.e. human-readable chunk names)
     name_map: dict[str, str] = {}
@@ -228,9 +238,12 @@ def parse_vk_bytes(soup: bs4.BeautifulSoup) -> list[int]:
     el = soup.find("meta", {"name": "twitter-site-verification", "content": True})
     el = str(el.get("content")) if el and isinstance(el, bs4.Tag) else None
     if not el:
-        raise Exception("Couldn't get XClientTxId key bytes")
+        raise XClIdParseError("X verification key not found")
 
-    return list(base64.b64decode(bytes(el, "utf-8")))
+    try:
+        return list(base64.b64decode(bytes(el, "utf-8"), validate=True))
+    except ValueError as e:
+        raise XClIdParseError("Invalid X verification key") from e
 
 
 # File holding the animation indices: legacy build linked `ondemand.s.*.js`,
@@ -245,31 +258,44 @@ async def _find_indices_url(scripts: list[str], clt: HttpClient) -> str:
     # concurrently and resolve the first reference we find, then stop.
     sem = asyncio.Semaphore(16)
 
-    async def fetch(url: str) -> tuple[str, str]:
+    async def fetch(url: str) -> tuple[str, str | None]:
         async with sem:
             try:
-                return url, (await clt.get(url)).text
-            except Exception:
-                return url, ""
+                rep = await clt.get(url)
+                rep.raise_for_status()
+                return url, rep.text
+            except Exception as e:
+                logger.trace(f"XClId asset failed: {format_error(e)} - {url}")
+                return url, None
 
     tasks = [asyncio.create_task(fetch(u)) for u in scripts]
+    loaded, failed = 0, 0
     try:
         for fut in asyncio.as_completed(tasks):
             url, body = await fut
+            if body is None:
+                failed += 1
+                continue
+
+            loaded += 1
             m = INDICES_FILE_RE.search(body)
             if m:
                 return urljoin(url, m.group(0))
     finally:
         for t in tasks:
             t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
-    raise Exception("Couldn't get XClientTxId indices script")
+    raise XClIdParseError(
+        f"Signing script not found (assets: {loaded} loaded, {failed} failed). "
+        "Enable TRACE logs for details"
+    )
 
 
 async def parse_anim_idx(text: str, clt: HttpClient) -> list[int]:
     scripts = list(get_scripts_list(text))
     if not scripts:
-        raise Exception("Couldn't get XClientTxId scripts")
+        raise XClIdParseError("X web scripts not found")
 
     # Legacy build links the indices file directly; the current x-web build
     # hides it behind a dynamic import inside a bundle chunk.
@@ -280,7 +306,7 @@ async def parse_anim_idx(text: str, clt: HttpClient) -> list[int]:
 
     items = [int(x.group(2)) for x in INDICES_REGEX.finditer(text)]
     if not items:
-        raise Exception("Couldn't get XClientTxId indices")
+        raise XClIdParseError("Signing indices not found")
 
     return items
 
@@ -290,12 +316,14 @@ def parse_anim_arr(soup: bs4.BeautifulSoup, vk_bytes: list[int]) -> list[list[fl
     els = list(soup.select("svg[id^='loading-x-anim'] g:first-child path:nth-child(2)"))
     els = [str(x.get("d") or "").strip() for x in els]
     if not els:
-        raise Exception("Couldn't get XClientTxId animation array")
+        raise XClIdParseError("Animation data not found")
 
     idx = vk_bytes[5] % len(els)
     dat = els[idx][9:].split("C")
-    arr = [list(map(float, re.sub(r"[^\d]+", " ", x).split())) for x in dat]
-    return arr
+    try:
+        return [list(map(float, re.sub(r"[^\d]+", " ", x).split())) for x in dat]
+    except (IndexError, ValueError) as e:
+        raise XClIdParseError("Invalid animation data") from e
 
 
 async def load_keys(soup: bs4.BeautifulSoup, clt: HttpClient) -> tuple[list[int], str]:
@@ -350,31 +378,3 @@ class XClIdGen:
         pld = bytearray([num, *[x ^ num for x in pld]])
         out = base64.b64encode(pld).decode("utf-8").strip("=")
         return out
-
-
-# MARK: Demo code
-
-
-async def main():
-    cookies_raw = os.getenv("TWS_COOKIES")
-    cookies = parse_cookies(cookies_raw) if cookies_raw else None
-    if not cookies:
-        print("Warning: TWS_COOKIES not set — anonymous fetch will likely fail.", file=sys.stderr)
-
-    clt = _make_client(cookies=cookies)
-    try:
-        text = await get_tw_page_text("https://x.com/elonmusk", clt)
-        soup = bs4.BeautifulSoup(text, "html.parser")
-        vk_bytes, anim_key = await load_keys(soup, clt)
-    finally:
-        await clt.aclose()
-    clid_gen = XClIdGen(vk_bytes, anim_key)
-
-    method = "GET"
-    path = "/i/api/graphql/AIdc203rPpK_k_2KWSdm7g/SearchTimeline"
-    clid = clid_gen.calc(method, path)
-    print(clid)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
