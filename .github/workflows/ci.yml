@@ -56,7 +56,7 @@ jobs:
       - name: Extract changelog entry
         run: |
           VERSION="${{ github.ref_name }}"
-          NOTES=$(awk "/^## ${VERSION}/{found=1; next} /^## /{found=0} found" changelog.md)
+          NOTES=$(awk "/^## ${VERSION}/{found=1; next} /^## /{found=0} found && !/^---$/" changelog.md)
           if [ -z "$NOTES" ]; then
             echo "Error: no changelog entry found for ${VERSION}"
             exit 1

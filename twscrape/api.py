@@ -672,9 +672,7 @@ class API:
                 yield x
 
     async def community_moderators(self, community_id: int, limit=-1, kv: KV = None):
-        async with aclosing(
-            self.community_moderators_raw(community_id, limit=limit, kv=kv)
-        ) as gen:
+        async with aclosing(self.community_moderators_raw(community_id, limit=limit, kv=kv)) as gen:
             async for rep in gen:
                 for x in parse_users(rep, limit):
                     yield x

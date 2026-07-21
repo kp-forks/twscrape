@@ -346,9 +346,7 @@ async def load_keys(soup: bs4.BeautifulSoup, clt: HttpClient) -> tuple[list[int]
 
 class XClIdGen:
     @staticmethod
-    async def create(
-        proxy: str | None = None, cookies: dict[str, str] | None = None
-    ) -> "XClIdGen":
+    async def create(proxy: str | None = None, cookies: dict[str, str] | None = None) -> "XClIdGen":
         # X serves a different/legacy web build to authenticated vs anonymous
         # sessions. Only authenticated sessions reliably contain the indices
         # this parser depends on (see INDICES_FILE_RE).

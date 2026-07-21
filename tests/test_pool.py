@@ -255,9 +255,7 @@ async def test_get_for_queue_or_wait_raises_via_env(pool_mock: AccountsPool, mon
         await pool_mock.get_for_queue_or_wait("TestQueue")
 
 
-async def test_get_for_queue_or_wait_waits_for_locked_account(
-    pool_mock: AccountsPool, monkeypatch
-):
+async def test_get_for_queue_or_wait_waits_for_locked_account(pool_mock: AccountsPool, monkeypatch):
     queue = "TestQueue"
     pool = AccountsPool(pool_mock._db_file, wait_timeout=1, wait_interval=0.1)
     await pool.add_account("user1", "pass1", "email1", "ep1")
