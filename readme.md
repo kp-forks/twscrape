@@ -111,6 +111,14 @@ async for tweet in api.search("open source lang:en", limit=100):
     print(tweet.id, tweet.rawContent)
 ```
 
+Configure what happens when no account is immediately available:
+
+```python
+api = API(raise_when_no_account=True, wait_timeout=30, wait_interval=1)
+```
+
+`wait_timeout` limits how long to wait for a locked account, `wait_interval` controls how often the pool checks again, and `raise_when_no_account` raises `NoAccountError` instead of ending the operation. By default, twscrape waits indefinitely while active accounts are locked.
+
 Search defaults to the Latest tab. Pass `kv={"product": "Top"}` or `kv={"product": "Media"}` to use another search product:
 
 ```python
